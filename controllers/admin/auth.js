@@ -35,15 +35,15 @@ export const loginAdmin = async (req, res) => {
 
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
-      secure: true, // Set to true since hosted backend likely uses HTTPS
-      SameSite: "none", // Required for cross-site cookies
+      secure: false, // Set to true since hosted backend likely uses HTTPS
+      SameSite: "lax", // Required for cross-site cookies
       maxAge: 15 * 60 * 1000, // 15 minutes
     });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: true, // Set to true since hosted backend likely uses HTTPS
-      SameSite: "none", // Required for cross-site cookies
+      secure: false, // Set to true since hosted backend likely uses HTTPS
+      SameSite: "lax", // Required for cross-site cookies
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
     return res.status(200).json({ message: "Login successful" });
@@ -91,8 +91,8 @@ export const refreshAccessToken = async (req, res) => {
 
     res.cookie("accessToken", newAccessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      SameSite: "none",
+      secure: false,
+      SameSite: "lax",
       maxAge: 15 * 60 * 1000, // 15 minute
     });
 

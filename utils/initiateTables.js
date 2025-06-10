@@ -1,4 +1,4 @@
-import { pool } from "../db/db.js";
+
 
 export const initChatTables = async () => {
   try {

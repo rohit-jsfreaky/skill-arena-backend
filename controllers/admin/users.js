@@ -138,7 +138,7 @@ export const getUserById = async (req, res) => {
 };
 
 /**
- * Search users by username
+ * Search users by username, name, or user ID
  * @route GET /api/admin/users/search
  * @access Admin only
  */
@@ -157,25 +157,63 @@ export const searchUsers = async (req, res) => {
   try {
     client = await pool.connect();
     
-    const query = `
-      SELECT id, username, name
-      FROM users
-      WHERE username ILIKE $1 OR name ILIKE $1
-      ORDER BY 
-        CASE 
-          WHEN username ILIKE $2 THEN 0
-          WHEN username ILIKE $3 THEN 1
-          ELSE 2
-        END
-      LIMIT $4
-    `;
+    // Check if the search term is a number (potential user ID)
+    const isNumeric = /^\d+$/.test(term.toString().trim());
     
-    const result = await client.query(query, [
-      `%${term}%`, // Pattern for anywhere in the string
-      `${term}%`,  // Pattern for starts with (higher priority)
-      `%${term}`,  // Pattern for ends with (medium priority)
-      limit
-    ]);
+    let query;
+    let queryParams;
+    
+    if (isNumeric) {
+      // If search term is numeric, prioritize exact ID match, then include name/username matches
+      query = `
+        SELECT id, username, name
+        FROM users
+        WHERE id = $1 
+           OR username ILIKE $2 
+           OR name ILIKE $2
+        ORDER BY 
+          CASE 
+            WHEN id = $1 THEN 0
+            WHEN username ILIKE $3 THEN 1
+            WHEN username ILIKE $4 THEN 2
+            WHEN name ILIKE $3 THEN 3
+            ELSE 4
+          END
+        LIMIT $5
+      `;
+      
+      queryParams = [
+        parseInt(term), // Exact ID match
+        `%${term}%`,    // Pattern for anywhere in username/name
+        `${term}%`,     // Pattern for starts with (higher priority)
+        `%${term}`,     // Pattern for ends with (medium priority)
+        limit
+      ];
+    } else {
+      // If search term is not numeric, search only by username and name
+      query = `
+        SELECT id, username, name
+        FROM users
+        WHERE username ILIKE $1 OR name ILIKE $1
+        ORDER BY 
+          CASE 
+            WHEN username ILIKE $2 THEN 0
+            WHEN username ILIKE $3 THEN 1
+            WHEN name ILIKE $2 THEN 2
+            ELSE 3
+          END
+        LIMIT $4
+      `;
+      
+      queryParams = [
+        `%${term}%`, // Pattern for anywhere in the string
+        `${term}%`,  // Pattern for starts with (higher priority)
+        `%${term}`,  // Pattern for ends with (medium priority)
+        limit
+      ];
+    }
+    
+    const result = await client.query(query, queryParams);
     
     return res.status(200).json({
       success: true,

@@ -463,3 +463,117 @@ export const searchUsers = async (req, res) => {
     if (client) client.release();
   }
 };
+
+// Client-side user search with support for ID, username, and name
+export const searchUsersForClient = async (req, res) => {
+  let client;
+  try {
+    const { userId } = req.auth || {};
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ 
+          success: false,
+          message: "Unauthorized: You need to log in." 
+        });
+    }
+
+    const { term, limit = 5 } = req.query;
+    
+    if (!term) {
+      return res.status(400).json({
+        success: false,
+        message: "Search term is required"
+      });
+    }
+
+    // For numeric searches (user ID), allow single character searches
+    // For text searches, require at least 2 characters
+    const isNumeric = /^\d+$/.test(term.toString().trim());
+    const minLength = isNumeric ? 1 : 2;
+    
+    if (term.length < minLength) {
+      return res.status(400).json({
+        success: false,
+        message: isNumeric 
+          ? "Enter user ID to search" 
+          : "Type at least 2 characters to search"
+      });
+    }
+
+    client = await pool.connect();
+    
+    let query;
+    let queryParams;
+    
+    if (isNumeric) {
+      // If search term is numeric, prioritize exact ID match, then include name/username matches
+      query = `
+        SELECT id, username, name, profile
+        FROM users
+        WHERE id = $1 
+           OR username ILIKE $2 
+           OR name ILIKE $2
+        ORDER BY 
+          CASE 
+            WHEN id = $1 THEN 0
+            WHEN username ILIKE $3 THEN 1
+            WHEN username ILIKE $4 THEN 2
+            WHEN name ILIKE $3 THEN 3
+            ELSE 4
+          END
+        LIMIT $5
+      `;
+      
+      queryParams = [
+        parseInt(term), // Exact ID match
+        `%${term}%`,    // Pattern for anywhere in username/name
+        `${term}%`,     // Pattern for starts with (higher priority)
+        `%${term}`,     // Pattern for ends with (medium priority)
+        limit
+      ];
+    } else {
+      // If search term is not numeric, search only by username and name
+      query = `
+        SELECT id, username, name, profile
+        FROM users
+        WHERE username ILIKE $1 OR name ILIKE $1
+        ORDER BY 
+          CASE 
+            WHEN username ILIKE $2 THEN 0
+            WHEN username ILIKE $3 THEN 1
+            WHEN name ILIKE $2 THEN 2
+            ELSE 3
+          END
+        LIMIT $4
+      `;
+      
+      queryParams = [
+        `%${term}%`, // Pattern for anywhere in the string
+        `${term}%`,  // Pattern for starts with (higher priority)
+        `%${term}`,  // Pattern for ends with (medium priority)
+        limit
+      ];
+    }
+    
+    const result = await client.query(query, queryParams);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Search results fetched successfully",
+      data: result.rows
+    });
+    
+  } catch (error) {
+    console.error("Error searching users for client:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to search users",
+      error: error.message
+    });
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+};

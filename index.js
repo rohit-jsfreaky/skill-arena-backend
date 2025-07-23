@@ -44,6 +44,9 @@ import marginRouter from "./routes/admin/margin.js";
 import { adminPagesRouter } from "./routes/admin/pages.js";
 import { pagesRouter } from "./routes/pages.js";
 import { createFinalSchema } from "./utils/intiateMainTables.js";
+import { adminLeaderboardRouter } from "./routes/admin/leaderboard.js";
+import { initLeaderboardTables } from "./utils/initLeaderboardTables.js";
+import { fixLeaderboardSchema } from "./utils/fixLeaderboardSchema.js";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -134,6 +137,7 @@ app.use("/api/notifications", notificationRouter);
 app.use("/api/admin/margin", marginRouter);
 app.use("/api/admin/pages", adminPagesRouter);
 app.use("/api/pages", pagesRouter);
+app.use("/api/admin/leaderboard", adminLeaderboardRouter);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -147,6 +151,10 @@ app.use((err, req, res, next) => {
 //  initTdmTables();
 // Initialize notification tables
 //  initNotificationTables();
+// Initialize leaderboard tables
+//  initLeaderboardTables();
+// Fix leaderboard schema
+// fixLeaderboardSchema();
 
 chatSocketsManager();
 

@@ -71,11 +71,10 @@ export const getGlobalLeaderboard = async (req, res) => {
       matchTimeConstraint = "AND m.end_time >= NOW() - INTERVAL '30 days'";
     }
 
-    // Get total count for pagination
+    // Get total count for pagination - show all users
     const countQuery = `
       SELECT COUNT(DISTINCT u.id) as total
       FROM users u
-      WHERE u.total_wins > 0
     `;
 
     const countResult = await pool.query(countQuery);
@@ -126,24 +125,27 @@ export const getGlobalLeaderboard = async (req, res) => {
             COALESCE(td.tournaments_joined, 0) as tournaments_joined,
             COALESCE(tdd.tdm_wins, 0) as tdm_wins,
             COALESCE(tdd.tdm_matches_joined, 0) as tdm_matches_joined,
+            COALESCE(uls.total_kills, 0) as kills,
+            COALESCE(uls.total_deaths, 0) as deaths,
+            COALESCE(uls.kill_death_ratio, 0) as kd_ratio,
+            COALESCE(uls.headshots, 0) as headshots,
+            COALESCE(uls.assists, 0) as assists,
             (
               COALESCE(td.tournament_wins, 0) * 100 + 
               COALESCE(tdd.tdm_wins, 0) * 25 +
-              COALESCE(u.total_wins, 0) * 5
+              COALESCE(u.total_wins, 0) * 5 +
+              COALESCE(uls.total_kills, 0) * 0.1
             ) as score
           FROM users u
           LEFT JOIN tournament_data td ON u.id = td.id
           LEFT JOIN tdm_data tdd ON u.id = tdd.id
-          WHERE 
-            COALESCE(td.tournament_wins, 0) > 0 OR 
-            COALESCE(tdd.tdm_wins, 0) > 0 OR
-            COALESCE(u.total_wins, 0) > 0
+          LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
         )
         SELECT 
           cd.*,
-          ROW_NUMBER() OVER (ORDER BY score DESC) as rank
+          ROW_NUMBER() OVER (ORDER BY score DESC, cd.id ASC) as rank
         FROM combined_data cd
-        ORDER BY score DESC
+        ORDER BY score DESC, cd.id ASC
         LIMIT $1 OFFSET $2
       `;
     } else {
@@ -188,24 +190,27 @@ export const getGlobalLeaderboard = async (req, res) => {
               NULL as tournaments_joined,
               NULL as tdm_wins,
               NULL as tdm_matches_joined,
+              NULL as kills,
+              NULL as deaths,
+              NULL as kd_ratio,
+              NULL as headshots,
+              NULL as assists,
               (
                 COALESCE(td.tournament_wins, 0) * 100 + 
                 COALESCE(tdd.tdm_wins, 0) * 25 +
-                COALESCE(u.total_wins, 0) * 5
+                COALESCE(u.total_wins, 0) * 5 +
+                COALESCE(uls.total_kills, 0) * 0.1
               ) as score
             FROM users u
             LEFT JOIN tournament_data td ON u.id = td.id
             LEFT JOIN tdm_data tdd ON u.id = tdd.id
-            WHERE 
-              COALESCE(td.tournament_wins, 0) > 0 OR 
-              COALESCE(tdd.tdm_wins, 0) > 0 OR
-              COALESCE(u.total_wins, 0) > 0
+            LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
           )
           SELECT 
             cd.*,
-            ROW_NUMBER() OVER (ORDER BY score DESC) as rank
+            ROW_NUMBER() OVER (ORDER BY score DESC, cd.id ASC) as rank
           FROM combined_data cd
-          ORDER BY score DESC 
+          ORDER BY score DESC, cd.id ASC 
           LIMIT $1 OFFSET $2
         `;
       } else {
@@ -247,24 +252,27 @@ export const getGlobalLeaderboard = async (req, res) => {
               CASE WHEN u.id = $1 THEN COALESCE(td.tournaments_joined, 0) ELSE NULL END as tournaments_joined,
               CASE WHEN u.id = $1 THEN COALESCE(tdd.tdm_wins, 0) ELSE NULL END as tdm_wins,
               CASE WHEN u.id = $1 THEN COALESCE(tdd.tdm_matches_joined, 0) ELSE NULL END as tdm_matches_joined,
+              CASE WHEN u.id = $1 THEN COALESCE(uls.total_kills, 0) ELSE NULL END as kills,
+              CASE WHEN u.id = $1 THEN COALESCE(uls.total_deaths, 0) ELSE NULL END as deaths,
+              CASE WHEN u.id = $1 THEN COALESCE(uls.kill_death_ratio, 0) ELSE NULL END as kd_ratio,
+              CASE WHEN u.id = $1 THEN COALESCE(uls.headshots, 0) ELSE NULL END as headshots,
+              CASE WHEN u.id = $1 THEN COALESCE(uls.assists, 0) ELSE NULL END as assists,
               (
                 COALESCE(td.tournament_wins, 0) * 100 + 
                 COALESCE(tdd.tdm_wins, 0) * 25 +
-                COALESCE(u.total_wins, 0) * 5
+                COALESCE(u.total_wins, 0) * 5 +
+                COALESCE(uls.total_kills, 0) * 0.1
               ) as score
             FROM users u
             LEFT JOIN tournament_data td ON u.id = td.id
             LEFT JOIN tdm_data tdd ON u.id = tdd.id
-            WHERE 
-              COALESCE(td.tournament_wins, 0) > 0 OR 
-              COALESCE(tdd.tdm_wins, 0) > 0 OR
-              COALESCE(u.total_wins, 0) > 0
+            LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
           )
           SELECT 
             cd.*,
-            ROW_NUMBER() OVER (ORDER BY score DESC) as rank
+            ROW_NUMBER() OVER (ORDER BY score DESC, cd.id ASC) as rank
           FROM combined_data cd
-          ORDER BY score DESC
+          ORDER BY score DESC, cd.id ASC
           LIMIT $2 OFFSET $3
         `;
       }
@@ -277,50 +285,48 @@ export const getGlobalLeaderboard = async (req, res) => {
     if (userIdInt) {
       const userRankResult = await pool.query(
         `
-        WITH combined_data AS (
-          WITH tournament_data AS (
-            SELECT 
-              u.id,
-              COUNT(DISTINCT CASE WHEN tr.winner_id = u.id THEN t.id END) as tournament_wins,
-              COUNT(DISTINCT ut.tournament_id) as tournaments_joined
-            FROM users u
-            LEFT JOIN user_tournaments ut ON u.id = ut.user_id
-            LEFT JOIN tournaments t ON ut.tournament_id = t.id
-            LEFT JOIN tournament_results tr ON t.id = tr.tournament_id
-            WHERE t.status = 'completed' ${tournamentTimeConstraint}
-            GROUP BY u.id
-          ),
-          tdm_data AS (
-            SELECT 
-              u.id,
-              COUNT(DISTINCT CASE WHEN m.winner_team_id = tm.id THEN m.id END) as tdm_wins,
-              COUNT(DISTINCT m.id) as tdm_matches_joined
-            FROM users u
-            LEFT JOIN tdm_team_members ttm ON u.id = ttm.user_id
-            LEFT JOIN tdm_teams tm ON ttm.team_id = tm.id
-            LEFT JOIN tdm_matches m ON tm.match_id = m.id
-            WHERE m.status = 'completed' ${matchTimeConstraint}
-            GROUP BY u.id
-          )
+        WITH tournament_data AS (
+          SELECT 
+            u.id,
+            COUNT(DISTINCT CASE WHEN tr.winner_id = u.id THEN t.id END) as tournament_wins,
+            COUNT(DISTINCT ut.tournament_id) as tournaments_joined
+          FROM users u
+          LEFT JOIN user_tournaments ut ON u.id = ut.user_id
+          LEFT JOIN tournaments t ON ut.tournament_id = t.id
+          LEFT JOIN tournament_results tr ON t.id = tr.tournament_id
+          WHERE t.status = 'completed' ${tournamentTimeConstraint}
+          GROUP BY u.id
+        ),
+        tdm_data AS (
+          SELECT 
+            u.id,
+            COUNT(DISTINCT CASE WHEN m.winner_team_id = tm.id THEN m.id END) as tdm_wins,
+            COUNT(DISTINCT m.id) as tdm_matches_joined
+          FROM users u
+          LEFT JOIN tdm_team_members ttm ON u.id = ttm.user_id
+          LEFT JOIN tdm_teams tm ON ttm.team_id = tm.id
+          LEFT JOIN tdm_matches m ON tm.match_id = m.id
+          WHERE m.status = 'completed' ${matchTimeConstraint}
+          GROUP BY u.id
+        ),
+        combined_data AS (
           SELECT 
             u.id, 
             (
               COALESCE(td.tournament_wins, 0) * 100 + 
               COALESCE(tdd.tdm_wins, 0) * 25 +
-              COALESCE(u.total_wins, 0) * 5
+              COALESCE(u.total_wins, 0) * 5 +
+              COALESCE(uls.total_kills, 0) * 0.1
             ) as score
           FROM users u
           LEFT JOIN tournament_data td ON u.id = td.id
           LEFT JOIN tdm_data tdd ON u.id = tdd.id
-          WHERE 
-            COALESCE(td.tournament_wins, 0) > 0 OR 
-            COALESCE(tdd.tdm_wins, 0) > 0 OR
-            COALESCE(u.total_wins, 0) > 0
+          LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
         )
         SELECT 
-          ROW_NUMBER() OVER (ORDER BY score DESC) as rank
-        FROM combined_data
-        WHERE id = $1
+          ROW_NUMBER() OVER (ORDER BY score DESC, cd.id ASC) as rank
+        FROM combined_data cd
+        WHERE cd.id = $1
       `,
         [userIdInt]
       );

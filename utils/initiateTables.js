@@ -104,7 +104,8 @@ export const initChatTables = async () => {
         status VARCHAR(20) NOT NULL CHECK (status IN ('upcoming', 'ongoing', 'completed')),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         room_id VARCHAR(255),
-        room_password VARCHAR(255)
+        room_password VARCHAR(255),
+        youtube_live_url TEXT DEFAULT NULL
       );
     `);
 

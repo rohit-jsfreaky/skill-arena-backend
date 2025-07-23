@@ -47,6 +47,7 @@ import { createFinalSchema } from "./utils/intiateMainTables.js";
 import { adminLeaderboardRouter } from "./routes/admin/leaderboard.js";
 import { initLeaderboardTables } from "./utils/initLeaderboardTables.js";
 import { fixLeaderboardSchema } from "./utils/fixLeaderboardSchema.js";
+import { addYoutubeLiveUrlColumn } from "./utils/addYoutubeLiveUrl.js";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -156,6 +157,8 @@ app.use((err, req, res, next) => {
 //  initLeaderboardTables();
 // Fix leaderboard schema
 // fixLeaderboardSchema();
+// Add YouTube live URL column to tournaments
+// addYoutubeLiveUrlColumn();
 
 chatSocketsManager();
 

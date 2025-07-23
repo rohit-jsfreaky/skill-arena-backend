@@ -94,6 +94,7 @@ export const createTournament = async (req, res) => {
     start_time,
     end_time,
     rules,
+    youtube_live_url, // Optional YouTube live URL
   } = req.body;
 
   if (
@@ -134,6 +135,15 @@ export const createTournament = async (req, res) => {
     return res.status(400).json({ error: "Image must be a valid URL." });
   }
 
+  // Optional YouTube URL validation
+  if (youtube_live_url) {
+    const isYouTubeUrl =
+      youtube_live_url.startsWith("http://") || youtube_live_url.startsWith("https://");
+    if (!isYouTubeUrl) {
+      return res.status(400).json({ error: "YouTube live URL must be a valid URL." });
+    }
+  }
+
   let client;
   try {
     client = await pool.connect();
@@ -141,8 +151,8 @@ export const createTournament = async (req, res) => {
     const tournamentStatus = "upcoming";
     const query = `
         INSERT INTO tournaments 
-        (name, game_name, description, image, entry_fee_normal, entry_fee_pro, prize_pool, team_mode, max_participants, start_time, end_time, rules,status) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,$13) 
+        (name, game_name, description, image, entry_fee_normal, entry_fee_pro, prize_pool, team_mode, max_participants, start_time, end_time, rules, status, youtube_live_url) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
         RETURNING *;
       `;
 
@@ -160,6 +170,7 @@ export const createTournament = async (req, res) => {
       endTime,
       rules,
       tournamentStatus,
+      youtube_live_url || null,
     ];
 
     const result = await client.query(query, values);
@@ -207,6 +218,7 @@ export const updateTournament = async (req, res) => {
     status,
     room_id,
     room_password,
+    youtube_live_url, // Optional YouTube live URL
   } = req.body;
 
   // Simple URL validation if image is provided
@@ -215,6 +227,15 @@ export const updateTournament = async (req, res) => {
       image && (image.startsWith("http://") || image.startsWith("https://"));
     if (!isUrl) {
       return res.status(400).json({ error: "Image must be a valid URL." });
+    }
+  }
+
+  // Optional YouTube URL validation
+  if (youtube_live_url) {
+    const isYouTubeUrl =
+      youtube_live_url.startsWith("http://") || youtube_live_url.startsWith("https://");
+    if (!isYouTubeUrl) {
+      return res.status(400).json({ error: "YouTube live URL must be a valid URL." });
     }
   }
 
@@ -254,8 +275,9 @@ export const updateTournament = async (req, res) => {
         rules = COALESCE($12, rules),
         status = COALESCE($13, status),
         room_id = COALESCE($14, room_id),
-        room_password = COALESCE($15, room_password)
-      WHERE id = $16
+        room_password = COALESCE($15, room_password),
+        youtube_live_url = COALESCE($16, youtube_live_url)
+      WHERE id = $17
       RETURNING *;
     `;
 
@@ -275,6 +297,7 @@ export const updateTournament = async (req, res) => {
       status,
       room_id,
       room_password,
+      youtube_live_url,
       id,
     ];
 

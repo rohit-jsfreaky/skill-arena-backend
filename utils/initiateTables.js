@@ -1,4 +1,4 @@
-
+import { pool } from "../db/db.js";
 
 export const initChatTables = async () => {
   try {
@@ -35,6 +35,7 @@ export const initChatTables = async () => {
         id SERIAL PRIMARY KEY,
         name VARCHAR(50) UNIQUE NOT NULL,
         price DECIMAL(10,2) NOT NULL,
+        duration INTERVAL DEFAULT NULL,
         benefits TEXT[]
       );
     `);
@@ -242,6 +243,12 @@ export const initChatTables = async () => {
       ALTER TABLE games 
       ADD COLUMN IF NOT EXISTS access_type VARCHAR(10) NOT NULL DEFAULT 'free' 
       CHECK (access_type IN ('free', 'pro'))
+    `);
+    
+    // Add duration column to memberships table if it doesn't exist
+    await pool.query(`
+      ALTER TABLE memberships 
+      ADD COLUMN IF NOT EXISTS duration INTERVAL DEFAULT NULL
     `);
     
     // Set all games to free initially

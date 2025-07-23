@@ -6,6 +6,6 @@ const leaderboardRouter = express.Router();
 
 leaderboardRouter.get("/global", authMiddleware, getGlobalLeaderboard);
 leaderboardRouter.get("/game/:gameId", authMiddleware, getGameLeaderboard);
-leaderboardRouter.get("/user/:user_id?", authMiddleware, getUserLeaderboardStats);
+leaderboardRouter.get("/user/:user_id/:my_user_id", authMiddleware, getUserLeaderboardStats);
 
 export default leaderboardRouter;

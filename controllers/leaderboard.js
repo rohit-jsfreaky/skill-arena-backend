@@ -2,6 +2,8 @@ import { pool } from "../db/db.js";
 
 // Helper function to check if a user has an active membership
 const checkUserMembership = async (userId) => {
+
+  console.log("Checking membership for user ID:", userId);
   try {
     const query = `
       SELECT u.membership_id, u.membership_expiry, m.name as plan_name 
@@ -720,22 +722,38 @@ export const getUserLeaderboardStats = async (req, res) => {
         .json({ message: "Unauthorized: You need to log in." });
     }
 
-    const { user_id } = req.params;
+    const { user_id, my_user_id } = req.params;
     
-    // Validate and parse user_id
+    // Parse the target user ID (whose stats we want to view)
     let targetUserId = null;
     if (user_id && user_id !== 'undefined' && user_id !== 'null' && !isNaN(parseInt(user_id))) {
       targetUserId = parseInt(user_id);
     } else {
-      return res.status(400).json({ message: "Valid user ID is required" });
+      return res.status(400).json({ 
+        success: false,
+        message: "Valid target user ID is required" 
+      });
     }
 
-    const membershipStatus = await checkUserMembership(targetUserId);
+    // Parse the requesting user ID (for membership check)
+    let requestingUserId = null;
+    if (my_user_id && my_user_id !== 'undefined' && my_user_id !== 'null' && !isNaN(parseInt(my_user_id))) {
+      requestingUserId = parseInt(my_user_id);
+    } else {
+      return res.status(400).json({ 
+        success: false,
+        message: "Valid requesting user ID is required" 
+      });
+    }
+
+    // Check membership status of the requesting user (not the target user)
+    const membershipStatus = await checkUserMembership(requestingUserId);
     const isPro = membershipStatus.active;
 
-    // Check if viewing own profile or has membership to view others
-    const isOwnProfile = parseInt(userId) === targetUserId;
+    // Check if viewing own profile
+    const isOwnProfile = targetUserId === requestingUserId;
 
+    // If not viewing own profile and not a pro member, deny access
     if (!isOwnProfile && !isPro) {
       return res.status(403).json({
         success: false,
@@ -744,7 +762,7 @@ export const getUserLeaderboardStats = async (req, res) => {
       });
     }
 
-    // Rest of the function remains the same...
+    // Enhanced query to include kill/death stats and better data handling
     const userStatsQuery = `
       WITH tournament_data AS (
         SELECT 
@@ -757,7 +775,7 @@ export const getUserLeaderboardStats = async (req, res) => {
       ),
       tdm_data AS (
         SELECT 
-          COUNT(DISTINCT CASE WHEN m.winner_team_id = ttm.team_id THEN m.id END) as tdm_wins,
+          COUNT(DISTINCT CASE WHEN m.winner_team_id = tm.id THEN m.id END) as tdm_wins,
           COUNT(DISTINCT m.id) as tdm_matches_joined
         FROM tdm_team_members ttm
         JOIN tdm_teams tm ON ttm.team_id = tm.id
@@ -769,7 +787,7 @@ export const getUserLeaderboardStats = async (req, res) => {
           COALESCE(t.game_name, m.game_name) as game_name,
           COUNT(DISTINCT CASE WHEN tr.winner_id = $1 THEN t.id END) as tournament_wins,
           COUNT(DISTINCT CASE WHEN t.id IS NOT NULL THEN t.id END) as tournaments_joined,
-          COUNT(DISTINCT CASE WHEN m.winner_team_id = ttm.team_id THEN m.id END) as tdm_wins,
+          COUNT(DISTINCT CASE WHEN m.winner_team_id = tm.id THEN m.id END) as tdm_wins,
           COUNT(DISTINCT CASE WHEN m.id IS NOT NULL THEN m.id END) as tdm_matches_joined
         FROM users u
         LEFT JOIN user_tournaments ut ON u.id = ut.user_id
@@ -787,16 +805,22 @@ export const getUserLeaderboardStats = async (req, res) => {
         u.username, 
         u.name,
         u.profile,
-        u.total_wins,
-        u.total_games_played,
-        td.tournament_wins,
-        td.tournaments_joined,
-        tdd.tdm_wins,
-        tdd.tdm_matches_joined,
+        COALESCE(u.total_wins, 0) as total_wins,
+        COALESCE(u.total_games_played, 0) as total_games_played,
+        COALESCE(td.tournament_wins, 0) as tournament_wins,
+        COALESCE(td.tournaments_joined, 0) as tournaments_joined,
+        COALESCE(tdd.tdm_wins, 0) as tdm_wins,
+        COALESCE(tdd.tdm_matches_joined, 0) as tdm_matches_joined,
+        COALESCE(uls.total_kills, 0) as kills,
+        COALESCE(uls.total_deaths, 0) as deaths,
+        COALESCE(uls.kill_death_ratio, 0.00) as kd_ratio,
+        COALESCE(uls.headshots, 0) as headshots,
+        COALESCE(uls.assists, 0) as assists,
         (
           COALESCE(td.tournament_wins, 0) * 100 + 
           COALESCE(tdd.tdm_wins, 0) * 25 +
-          COALESCE(u.total_wins, 0) * 5
+          COALESCE(u.total_wins, 0) * 5 +
+          COALESCE(uls.total_kills, 0) * 0.1
         ) as score,
         (
           SELECT json_agg(
@@ -813,59 +837,61 @@ export const getUserLeaderboardStats = async (req, res) => {
       FROM users u
       CROSS JOIN tournament_data td
       CROSS JOIN tdm_data tdd
+      LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
       WHERE u.id = $1
     `;
 
     const userStats = await pool.query(userStatsQuery, [targetUserId]);
 
     if (userStats.rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
     }
 
-    // Get user's global rank
+    // Get user's global rank with updated scoring including kills
     const userRankQuery = `
-      WITH combined_data AS (
-        WITH tournament_data AS (
-          SELECT 
-            u.id,
-            COUNT(DISTINCT CASE WHEN tr.winner_id = u.id THEN t.id END) as tournament_wins,
-            COUNT(DISTINCT ut.tournament_id) as tournaments_joined
-          FROM users u
-          LEFT JOIN user_tournaments ut ON u.id = ut.user_id
-          LEFT JOIN tournaments t ON ut.tournament_id = t.id
-          LEFT JOIN tournament_results tr ON t.id = tr.tournament_id
-          WHERE t.status = 'completed'
-          GROUP BY u.id
-        ),
-        tdm_data AS (
-          SELECT 
-            u.id,
-            COUNT(DISTINCT CASE WHEN m.winner_team_id = ttm.team_id THEN m.id END) as tdm_wins,
-            COUNT(DISTINCT m.id) as tdm_matches_joined
-          FROM users u
-          LEFT JOIN tdm_team_members ttm ON u.id = ttm.user_id
-          LEFT JOIN tdm_teams tm ON ttm.team_id = tm.id
-          LEFT JOIN tdm_matches m ON tm.match_id = m.id
-          WHERE m.status = 'completed'
-          GROUP BY u.id
-        )
+      WITH tournament_data AS (
+        SELECT 
+          u.id,
+          COUNT(DISTINCT CASE WHEN tr.winner_id = u.id THEN t.id END) as tournament_wins,
+          COUNT(DISTINCT ut.tournament_id) as tournaments_joined
+        FROM users u
+        LEFT JOIN user_tournaments ut ON u.id = ut.user_id
+        LEFT JOIN tournaments t ON ut.tournament_id = t.id
+        LEFT JOIN tournament_results tr ON t.id = tr.tournament_id
+        WHERE t.status = 'completed'
+        GROUP BY u.id
+      ),
+      tdm_data AS (
+        SELECT 
+          u.id,
+          COUNT(DISTINCT CASE WHEN m.winner_team_id = tm.id THEN m.id END) as tdm_wins,
+          COUNT(DISTINCT m.id) as tdm_matches_joined
+        FROM users u
+        LEFT JOIN tdm_team_members ttm ON u.id = ttm.user_id
+        LEFT JOIN tdm_teams tm ON ttm.team_id = tm.id
+        LEFT JOIN tdm_matches m ON tm.match_id = m.id
+        WHERE m.status = 'completed'
+        GROUP BY u.id
+      ),
+      combined_data AS (
         SELECT 
           u.id, 
           (
             COALESCE(td.tournament_wins, 0) * 100 + 
             COALESCE(tdd.tdm_wins, 0) * 25 +
-            COALESCE(u.total_wins, 0) * 5
+            COALESCE(u.total_wins, 0) * 5 +
+            COALESCE(uls.total_kills, 0) * 0.1
           ) as score
         FROM users u
         LEFT JOIN tournament_data td ON u.id = td.id
         LEFT JOIN tdm_data tdd ON u.id = tdd.id
-        WHERE 
-          COALESCE(td.tournament_wins, 0) > 0 OR 
-          COALESCE(tdd.tdm_wins, 0) > 0 OR
-          COALESCE(u.total_wins, 0) > 0
+        LEFT JOIN user_leaderboard_stats uls ON u.id = uls.user_id
       )
       SELECT 
-        ROW_NUMBER() OVER (ORDER BY score DESC) as rank
+        ROW_NUMBER() OVER (ORDER BY score DESC, id ASC) as rank
       FROM combined_data
       WHERE id = $1
     `;

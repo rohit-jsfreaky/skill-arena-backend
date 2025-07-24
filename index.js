@@ -45,6 +45,9 @@ import { adminPagesRouter } from "./routes/admin/pages.js";
 import { pagesRouter } from "./routes/pages.js";
 import { createFinalSchema } from "./utils/intiateMainTables.js";
 import { adminLeaderboardRouter } from "./routes/admin/leaderboard.js";
+import { adminPlatformStatsRouter } from "./routes/admin/platformStats.js";
+import { platformStatsRouter } from "./routes/platformStats.js";
+import { initPlatformStatsTable } from "./utils/initPlatformStats.js";
 import { initLeaderboardTables } from "./utils/initLeaderboardTables.js";
 import { fixLeaderboardSchema } from "./utils/fixLeaderboardSchema.js";
 import { addYoutubeLiveUrlColumn } from "./utils/addYoutubeLiveUrl.js";
@@ -139,6 +142,8 @@ app.use("/api/admin/margin", marginRouter);
 app.use("/api/admin/pages", adminPagesRouter);
 app.use("/api/pages", pagesRouter);
 app.use("/api/admin/leaderboard", adminLeaderboardRouter);
+app.use("/api/admin/platform-stats", adminPlatformStatsRouter);
+app.use("/api/platform-stats", platformStatsRouter);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -159,6 +164,8 @@ app.use((err, req, res, next) => {
 // fixLeaderboardSchema();
 // Add YouTube live URL column to tournaments
 // addYoutubeLiveUrlColumn();
+// Initialize platform statistics table
+// initPlatformStatsTable();
 
 chatSocketsManager();
 

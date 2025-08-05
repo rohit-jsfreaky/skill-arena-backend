@@ -1,5 +1,170 @@
 import { pool } from "../../db/db.js";
 
+// Admin: Create a new TDM Match
+export const createTdmMatch = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const {
+      match_type,
+      game_name,
+      entry_fee,
+      team_size = 4,
+    } = req.body;
+
+    // Validation
+    if (!match_type || !game_name || entry_fee === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: match_type, game_name, entry_fee",
+      });
+    }
+
+    if (!["public", "private"].includes(match_type)) {
+      return res.status(400).json({
+        success: false,
+        message: "match_type must be either 'public' or 'private'",
+      });
+    }
+
+    if (![4, 6, 8].includes(team_size)) {
+      return res.status(400).json({
+        success: false,
+        message: "team_size must be 4, 6, or 8",
+      });
+    }
+
+    // Calculate prize pool (assuming admin sets this)
+    const prize_pool = entry_fee * 2 * team_size; // Total entry fees from both teams
+
+    // Get admin ID from request (set by admin middleware)
+    const adminId = req.admin?.id || 1; // Default to 1 if not found
+
+    await client.query("BEGIN");
+
+    // Create the match
+    const matchQuery = `
+      INSERT INTO tdm_matches (
+        match_type, status, game_name, entry_fee, prize_pool, 
+        created_by, team_size
+      ) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `;
+
+    const matchResult = await client.query(matchQuery, [
+      match_type,
+      "waiting",
+      game_name,
+      entry_fee,
+      prize_pool,
+      adminId,
+      team_size,
+    ]);
+
+    const match = matchResult.rows[0];
+
+    // Create empty team slots for users to join
+    // This ensures the public matches query will work properly
+    const teamAQuery = `
+      INSERT INTO tdm_teams (
+        match_id, team_type, team_name, is_ready, payment_completed
+      ) 
+      VALUES ($1, 'team_a', NULL, false, false)
+      RETURNING *
+    `;
+
+    const teamBQuery = `
+      INSERT INTO tdm_teams (
+        match_id, team_type, team_name, is_ready, payment_completed
+      ) 
+      VALUES ($1, 'team_b', NULL, false, false)
+      RETURNING *
+    `;
+
+    await client.query(teamAQuery, [match.id]);
+    await client.query(teamBQuery, [match.id]);
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      success: true,
+      message: "TDM match created successfully",
+      data: {
+        match_id: match.id,
+        match,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error creating TDM match:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create TDM match",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+// Admin: Generate shareable link for private matches
+export const generatePrivateMatchLink = async (req, res) => {
+  try {
+    const { match_id } = req.params;
+
+    if (!match_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Match ID is required",
+      });
+    }
+
+    // Verify match exists and is private
+    const matchQuery = await pool.query(
+      "SELECT * FROM tdm_matches WHERE id = $1",
+      [match_id]
+    );
+
+    if (matchQuery.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Match not found",
+      });
+    }
+
+    const match = matchQuery.rows[0];
+
+    if (match.match_type !== "private") {
+      return res.status(400).json({
+        success: false,
+        message: "Only private matches can have shareable links",
+      });
+    }
+
+    // Generate the frontend URL for joining the match
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const shareableLink = `${frontendUrl}/tdm/join-match/${match_id}`;
+
+    res.status(200).json({
+      success: true,
+      message: "Shareable link generated successfully",
+      data: {
+        match_id: match.id,
+        shareable_link: shareableLink,
+        match_details: match,
+      },
+    });
+  } catch (error) {
+    console.error("Error generating private match link:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate shareable link",
+      error: error.message,
+    });
+  }
+};
+
 // Get all TDM matches with pagination and filtering
 export const getAllTdmMatches = async (req, res) => {
   try {

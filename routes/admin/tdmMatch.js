@@ -1,5 +1,7 @@
 import express from "express";
 import {
+  createTdmMatch,
+  generatePrivateMatchLink,
   getAllTdmMatches,
   getTdmMatchDetails,
   getAllTdmDisputes,
@@ -13,6 +15,8 @@ import { verifyAdmin } from "../../middlewares/adminAuthMiddleware.js";
 const adminTdmRouter = express.Router();
 
 // Admin TDM routes (all require admin authentication)
+adminTdmRouter.post("/matches/create", verifyAdmin, createTdmMatch);
+adminTdmRouter.get("/matches/:match_id/share-link", verifyAdmin, generatePrivateMatchLink);
 adminTdmRouter.get("/matches", verifyAdmin, getAllTdmMatches);
 adminTdmRouter.get("/matches/:match_id", verifyAdmin, getTdmMatchDetails);
 adminTdmRouter.get("/disputes", verifyAdmin, getAllTdmDisputes);

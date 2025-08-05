@@ -156,6 +156,7 @@ export const createTdmMatch = async (req, res) => {
 };
 
 // Join a public TDM match as Team B (Option 1)
+// Join a public TDM match (can join as Team A or Team B)
 export const joinPublicTdmMatch = async (req, res) => {
   const client = await pool.connect();
 
@@ -163,14 +164,14 @@ export const joinPublicTdmMatch = async (req, res) => {
     const { userId } = req.auth;
     if (!userId)
       return res.status(404).json({ message: "User not authenticated" });
-    const { match_id, team_name, team_members, captainId } = req.body;
+    const { match_id, team_name, team_members, captainId, preferred_team } = req.body;
 
     if (
       !match_id ||
       !team_name ||
       !team_members ||
-      team_members.length < 1 || // Changed from 4 to 1
-      team_members.length > 4 || // Add upper limit
+      team_members.length < 1 ||
+      team_members.length > 4 ||
       !captainId
     ) {
       return res.status(400).json({
@@ -182,11 +183,9 @@ export const joinPublicTdmMatch = async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Check if match exists and is public and waiting for Team B
+    // Check if match exists and is public and waiting
     const matchResult = await client.query(
-      `
-      SELECT * FROM tdm_matches WHERE id = $1 AND match_type = 'public' AND status = 'waiting'
-    `,
+      `SELECT * FROM tdm_matches WHERE id = $1 AND match_type = 'public' AND status = 'waiting'`,
       [match_id]
     );
 
@@ -200,65 +199,78 @@ export const joinPublicTdmMatch = async (req, res) => {
 
     const match = matchResult.rows[0];
 
-    // Check if Team B slot is empty
-    const teamBResult = await client.query(
-      `
-      SELECT * FROM tdm_teams WHERE match_id = $1 AND team_type = 'team_b'
-    `,
+    // Get both teams to see which slots are available
+    const teamsResult = await client.query(
+      `SELECT * FROM tdm_teams WHERE match_id = $1 ORDER BY team_type`,
       [match_id]
     );
 
-    if (
-      teamBResult.rows.length === 0 ||
-      teamBResult.rows[0].team_name !== null
-    ) {
+    const teams = teamsResult.rows;
+    const teamA = teams.find(t => t.team_type === 'team_a');
+    const teamB = teams.find(t => t.team_type === 'team_b');
+
+    // Determine which team to join
+    let targetTeam = null;
+    let teamType = null;
+
+    if (preferred_team === 'team_a' && teamA && !teamA.team_name) {
+      targetTeam = teamA;
+      teamType = 'team_a';
+    } else if (preferred_team === 'team_b' && teamB && !teamB.team_name) {
+      targetTeam = teamB;
+      teamType = 'team_b';
+    } else {
+      // Auto-assign to first available team
+      if (teamA && !teamA.team_name) {
+        targetTeam = teamA;
+        teamType = 'team_a';
+      } else if (teamB && !teamB.team_name) {
+        targetTeam = teamB;
+        teamType = 'team_b';
+      }
+    }
+
+    if (!targetTeam) {
       await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
-        message: "Team B is already taken for this match",
+        message: "No available team slots in this match",
       });
     }
 
-    // Update Team B with the new team name
-    const updatedTeamBResult = await client.query(
-      `
-      UPDATE tdm_teams
-      SET team_name = $1
-      WHERE match_id = $2 AND team_type = 'team_b'
-      RETURNING *
-    `,
-      [team_name, match_id]
+    // Update the team with the new team name
+    const updatedTeamResult = await client.query(
+      `UPDATE tdm_teams SET team_name = $1 WHERE id = $2 RETURNING *`,
+      [team_name, targetTeam.id]
     );
 
-    const teamB = updatedTeamBResult.rows[0];
+    const updatedTeam = updatedTeamResult.rows[0];
 
-    // Add team members to Team B with the requester as captain
+    // Add team members
     for (let i = 0; i < team_members.length; i++) {
-      const userId = team_members[i];
-      const isCaptain = userId === captainId || i === 0;
+      const memberId = team_members[i];
+      const isCaptain = memberId === captainId || i === 0;
 
       // Check if user exists
       const userExistsResult = await client.query(
         "SELECT * FROM users WHERE id = $1",
-        [userId]
+        [memberId]
       );
 
       if (userExistsResult.rows.length === 0) {
         await client.query("ROLLBACK");
         return res.status(404).json({
           success: false,
-          message: `User with ID ${userId} not found`,
+          message: `User with ID ${memberId} not found`,
         });
       }
 
       // Add team member
       await client.query(
-        `
-        INSERT INTO tdm_team_members
+        `INSERT INTO tdm_team_members
         (team_id, user_id, is_captain, payment_amount, payment_status)
-        VALUES ($1, $2, $3, $4, 'pending')
-      `,
-        [teamB.id, userId, isCaptain, match.entry_fee]
+        VALUES ($1, $2, $3, $4, 'pending')`,
+        [targetTeam.id, memberId, isCaptain, match.entry_fee]
       );
     }
 
@@ -266,17 +278,16 @@ export const joinPublicTdmMatch = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Successfully joined TDM match as Team B",
+      message: `Successfully joined as ${teamType.replace('_', ' ').toUpperCase()}`,
       data: {
         match_id: match.id,
-        entry_fee: match.entry_fee,
-        prize_pool: match.prize_pool,
-        team_b: teamB,
+        team: updatedTeam,
+        team_type: teamType,
       },
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("Error joining TDM match:", error);
+    console.error("Error joining public TDM match:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to join TDM match",
@@ -305,25 +316,49 @@ export const joinPrivateTdmMatch = async (req, res) => {
       });
     }
 
-    await client.query("BEGIN");
-
-    // Check if match exists and is private and waiting for Team B
-    const matchResult = await client.query(
-      `
-      SELECT * FROM tdm_matches WHERE id = $1 AND match_type = 'private' AND status = 'waiting'
-    `,
-      [match_id]
-    );
-
-    if (matchResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
+    // Validate match_id format (should be a valid number)
+    if (isNaN(match_id)) {
+      return res.status(400).json({
         success: false,
-        message: "Private TDM match not found or not available for joining",
+        message: "Invalid match ID format",
       });
     }
 
-    const match = matchResult.rows[0];
+    await client.query("BEGIN");
+
+    // First, check if match exists at all
+    const matchExistsResult = await client.query(
+      "SELECT * FROM tdm_matches WHERE id = $1",
+      [match_id]
+    );
+
+    if (matchExistsResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "This match does not exist",
+      });
+    }
+
+    const match = matchExistsResult.rows[0];
+
+    // Check if match is private
+    if (match.match_type !== 'private') {
+      await client.query("ROLLBACK");
+      return res.status(403).json({
+        success: false,
+        message: "This match is not a private match",
+      });
+    }
+
+    // Check if match is available for joining
+    if (match.status !== 'waiting') {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: `This match is not available for joining. Current status: ${match.status}`,
+      });
+    }
 
     // Check if Team B slot is empty
     const teamBResult = await client.query(
@@ -412,10 +447,178 @@ export const joinPrivateTdmMatch = async (req, res) => {
   }
 };
 
+// Join a private TDM match using shareable link
+export const joinPrivateMatchByLink = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { userId } = req.auth;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: "User not authenticated" 
+      });
+    }
+
+    const { match_id } = req.params;
+    const { team_name, team_members, captainId } = req.body;
+
+    // Validate match_id format (should be a valid number)
+    if (!match_id || isNaN(match_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid match ID format",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // First, check if match exists at all
+    const matchExistsResult = await client.query(
+      "SELECT * FROM tdm_matches WHERE id = $1",
+      [match_id]
+    );
+
+    if (matchExistsResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "This match does not exist",
+      });
+    }
+
+    const match = matchExistsResult.rows[0];
+
+    // Check if match is private and validate access
+    if (match.match_type !== 'private') {
+      await client.query("ROLLBACK");
+      return res.status(403).json({
+        success: false,
+        message: "This match is not a private match",
+      });
+    }
+
+    // Check if match is available for joining
+    if (match.status !== 'waiting') {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: `This match is not available for joining. Current status: ${match.status}`,
+      });
+    }
+
+    // Get available teams
+    const teamsResult = await client.query(
+      `SELECT t.*, COUNT(tm.id) as member_count 
+       FROM tdm_teams t 
+       LEFT JOIN tdm_team_members tm ON t.id = tm.team_id 
+       WHERE t.match_id = $1 
+       GROUP BY t.id, t.team_type
+       ORDER BY t.team_type`,
+      [match_id]
+    );
+
+    const teams = teamsResult.rows;
+    let targetTeam = null;
+
+    // Find first available team slot (no team name or no members)
+    for (const team of teams) {
+      if (!team.team_name || team.member_count === 0) {
+        targetTeam = team;
+        break;
+      }
+    }
+
+    if (!targetTeam) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "No available team slots in this match",
+      });
+    }
+
+    // Update team with team name if not set
+    if (!targetTeam.team_name && team_name) {
+      await client.query(
+        `UPDATE tdm_teams SET team_name = $1 WHERE id = $2`,
+        [team_name, targetTeam.id]
+      );
+    }
+
+    // Add team members if provided
+    if (team_members && team_members.length > 0) {
+      for (let i = 0; i < team_members.length; i++) {
+        const memberId = team_members[i];
+        const isCaptain = memberId === captainId || i === 0;
+
+        // Check if user exists
+        const userExistsResult = await client.query(
+          "SELECT * FROM users WHERE id = $1",
+          [memberId]
+        );
+
+        if (userExistsResult.rows.length === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({
+            success: false,
+            message: `User with ID ${memberId} not found`,
+          });
+        }
+
+        // Check if user is already in this match
+        const existingMemberResult = await client.query(
+          `SELECT tm.* FROM tdm_team_members tm 
+           JOIN tdm_teams t ON tm.team_id = t.id 
+           WHERE t.match_id = $1 AND tm.user_id = $2`,
+          [match_id, memberId]
+        );
+
+        if (existingMemberResult.rows.length > 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            success: false,
+            message: `User ${memberId} is already in this match`,
+          });
+        }
+
+        // Add team member
+        await client.query(
+          `INSERT INTO tdm_team_members (team_id, user_id, is_captain, payment_amount, payment_status)
+           VALUES ($1, $2, $3, $4, 'pending')`,
+          [targetTeam.id, memberId, isCaptain, match.entry_fee]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully joined the match as ${targetTeam.team_type.replace('_', ' ').toUpperCase()}`,
+      data: {
+        match_id: match.id,
+        team: targetTeam,
+        team_type: targetTeam.team_type,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error joining private match by link:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to join match",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
 // Get all available public TDM matches
 export const getPublicTdmMatches = async (req, res) => {
   try {
-    const { userId } = req.auth;
+    const { userId } = req.auth; // Clerk user ID for auth only
+    const { user_id } = req.query; // Database user ID from frontend
 
     if (!userId) {
       return res.status(401).json({
@@ -424,19 +627,40 @@ export const getPublicTdmMatches = async (req, res) => {
       });
     }
 
-    // Get all public matches that are waiting for Team B (status = waiting)
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Database user ID is required.",
+      });
+    }
+
+    // Get all public matches that are waiting for teams to join
+    // Admin creates matches without any teams initially
+    // Exclude matches where the user has already joined
     const result = await pool.query(`
       SELECT m.*, 
-        ta.id as team_a_id, ta.team_name as team_a_name,
-        (SELECT COUNT(*) FROM tdm_team_members WHERE team_id = ta.id) as team_a_members
+        ta.id as team_a_id, 
+        ta.team_name as team_a_name,
+        ta.is_ready as team_a_ready,
+        tb.id as team_b_id,
+        tb.team_name as team_b_name,
+        tb.is_ready as team_b_ready,
+        (SELECT COUNT(*) FROM tdm_team_members WHERE team_id = ta.id) as team_a_members,
+        (SELECT COUNT(*) FROM tdm_team_members WHERE team_id = tb.id) as team_b_members
       FROM tdm_matches m
-      JOIN tdm_teams ta ON m.id = ta.match_id AND ta.team_type = 'team_a'
-      JOIN tdm_teams tb ON m.id = tb.match_id AND tb.team_type = 'team_b'
+      LEFT JOIN tdm_teams ta ON m.id = ta.match_id AND ta.team_type = 'team_a'
+      LEFT JOIN tdm_teams tb ON m.id = tb.match_id AND tb.team_type = 'team_b'
       WHERE m.match_type = 'public' 
       AND m.status = 'waiting'
-      AND tb.team_name IS NULL
+      AND (ta.team_name IS NULL OR tb.team_name IS NULL)
+      AND m.id NOT IN (
+        SELECT DISTINCT t.match_id 
+        FROM tdm_teams t 
+        JOIN tdm_team_members tm ON t.id = tm.team_id 
+        WHERE tm.user_id = $1
+      )
       ORDER BY m.created_at DESC
-    `);
+    `, [user_id]);
 
     return res.status(200).json({
       success: true,

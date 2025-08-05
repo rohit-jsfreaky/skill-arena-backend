@@ -1,8 +1,8 @@
 import express from "express";
 import {
-  createTdmMatch,
   joinPublicTdmMatch,
   joinPrivateTdmMatch,
+  joinPrivateMatchByLink,
   getPublicTdmMatches,
   getTdmMatchById,
   processTdmTeamPayment,
@@ -24,13 +24,14 @@ import { pool } from "../../db/db.js";
 
 const tdmRouter = express.Router();
 
-// Public endpoints (require authentication)
-tdmRouter.post("/create", authMiddleware, createTdmMatch);
+// Public endpoints (require authentication) - USERS CAN ONLY JOIN MATCHES
+// NOTE: Match creation is now ADMIN-ONLY via /api/admin/tdm routes
 tdmRouter.get("/public", authMiddleware, getPublicTdmMatches);
 tdmRouter.get("/user-matches", authMiddleware, getUserTdmMatches);
 tdmRouter.get("/:match_id", authMiddleware, getTdmMatchById);
 tdmRouter.post("/join-public", authMiddleware, joinPublicTdmMatch);
 tdmRouter.post("/join-private", authMiddleware, joinPrivateTdmMatch);
+tdmRouter.post("/join-match/:match_id", authMiddleware, joinPrivateMatchByLink); // NEW: Join private match by link
 tdmRouter.post(
   "/:match_id/team/:team_id/payment",
   authMiddleware,

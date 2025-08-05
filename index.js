@@ -7,7 +7,11 @@ import { createServer } from "http";
 import cookieParser from "cookie-parser";
 import cron from "node-cron";
 import helmet from "helmet";
+import dotenv from "dotenv";
+import { clerkMiddleware } from "@clerk/express";
 import { pool } from "./db/db.js";
+
+dotenv.config();
 import { userRoutes } from "./routes/users.js";
 import { chatRoutes } from "./routes/globalChat.js";
 import {
@@ -51,6 +55,8 @@ import { initPlatformStatsTable } from "./utils/initPlatformStats.js";
 import { initLeaderboardTables } from "./utils/initLeaderboardTables.js";
 import { fixLeaderboardSchema } from "./utils/fixLeaderboardSchema.js";
 import { addYoutubeLiveUrlColumn } from "./utils/addYoutubeLiveUrl.js";
+import testTdmRouter from "./routes/test/testTdmRoutes.js";
+import testTournamentRouter from "./routes/test/tournamentTest.js";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -69,6 +75,12 @@ app.use(
     credentials: true, // ✅ Allow cookies/auth headers
   })
 );
+
+// Apply Clerk middleware globally
+app.use(clerkMiddleware({
+  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+  secretKey: process.env.CLERK_SECRET_KEY,
+}));
 
 app.use(express.json());
 app.use(helmet());
@@ -144,6 +156,10 @@ app.use("/api/pages", pagesRouter);
 app.use("/api/admin/leaderboard", adminLeaderboardRouter);
 app.use("/api/admin/platform-stats", adminPlatformStatsRouter);
 app.use("/api/platform-stats", platformStatsRouter);
+
+// Test routes (NO AUTH) - for development/testing only
+app.use("/api/test/tdm", testTdmRouter);
+app.use("/api/test/tournament", testTournamentRouter);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);

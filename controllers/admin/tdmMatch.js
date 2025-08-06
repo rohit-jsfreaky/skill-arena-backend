@@ -439,11 +439,11 @@ export const resolveTdmDispute = async (req, res) => {
     const dispute = disputeResult.rows[0];
     const matchId = dispute.match_id;
 
-    // Update dispute status
+    // Update dispute status with IST timestamp
     await client.query(
       `
       UPDATE tdm_disputes
-      SET status = $1, admin_notes = $2, resolved_at = NOW()
+      SET status = $1, admin_notes = $2, resolved_at = NOW() AT TIME ZONE 'Asia/Kolkata'
       WHERE id = $3
     `,
       [
@@ -475,7 +475,7 @@ export const resolveTdmDispute = async (req, res) => {
       await client.query(
         `
         UPDATE tdm_matches
-        SET winner_team_id = $1, status = 'completed', end_time = NOW()
+        SET winner_team_id = $1, status = 'completed', end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
         WHERE id = $2
       `,
         [winner_team_id, matchId]
@@ -486,7 +486,7 @@ export const resolveTdmDispute = async (req, res) => {
         `
         INSERT INTO tdm_match_results
         (match_id, winner_team_id, prize_awarded, prize_amount, resolution_method, resolved_at)
-        VALUES ($1, $2, true, $3, 'admin_decision', NOW())
+        VALUES ($1, $2, true, $3, 'admin_decision', NOW() AT TIME ZONE 'Asia/Kolkata')
         ON CONFLICT (match_id) 
         DO UPDATE SET
           winner_team_id = EXCLUDED.winner_team_id,
@@ -819,7 +819,7 @@ export const setTdmMatchWinner = async (req, res) => {
     await client.query(
       `
       UPDATE tdm_matches
-      SET status = 'completed', winner_team_id = $1, end_time = NOW()
+      SET status = 'completed', winner_team_id = $1, end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
       WHERE id = $2
     `,
       [winner_team_id, match_id]
@@ -830,7 +830,7 @@ export const setTdmMatchWinner = async (req, res) => {
       `
       INSERT INTO tdm_match_results
       (match_id, winner_team_id, prize_awarded, prize_amount, resolution_method, resolved_at)
-      VALUES ($1, $2, true, $3, 'admin_decision', NOW())
+      VALUES ($1, $2, true, $3, 'admin_decision', NOW() AT TIME ZONE 'Asia/Kolkata')
       ON CONFLICT (match_id) 
       DO UPDATE SET
         winner_team_id = EXCLUDED.winner_team_id,

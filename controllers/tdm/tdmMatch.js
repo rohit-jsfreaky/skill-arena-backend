@@ -63,12 +63,12 @@ export const createTdmMatch = async (req, res) => {
     const platformFee = totalEntryFees * (marginResult / 100);
     const prize_pool = Math.round(totalEntryFees - platformFee);
 
-    // Create the match with team_size
+    // Create the match with team_size using timezone-aware timestamp
     const matchResult = await client.query(
       `
       INSERT INTO tdm_matches 
-      (match_type, status, game_name, entry_fee, prize_pool, created_by, team_size)
-      VALUES ($1, 'waiting', $2, $3, $4, $5, $6)
+      (match_type, status, game_name, entry_fee, prize_pool, created_by, team_size, created_at)
+      VALUES ($1, 'waiting', $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'Asia/Kolkata')
       RETURNING *
     `,
       [match_type, game_name, entry_fee, prize_pool, creatorId, team_size]
@@ -1217,10 +1217,10 @@ const checkAndProcessTdmMatchResults = async (match_id) => {
           const winnerTeamMembers = winnerTeamMembersResult.rows;
           const prizePerMember = match.prize_pool / winnerTeamMembers.length;
 
-          // Update match status to completed and set winner team
+          // Update match status to completed and set winner team with IST timestamp
           await client.query(
             `UPDATE tdm_matches
-             SET status = 'completed', winner_team_id = $1, end_time = NOW()
+             SET status = 'completed', winner_team_id = $1, end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
              WHERE id = $2`,
             [winnerTeamId, match_id]
           );
@@ -1327,10 +1327,10 @@ const checkAndProcessTdmMatchResults = async (match_id) => {
         const winnerTeamMembers = winnerTeamMembersResult.rows;
         const prizePerMember = match.prize_pool / winnerTeamMembers.length;
 
-        // Update match status to completed and set winner team
+        // Update match status to completed and set winner team with IST timestamp
         await client.query(
           `UPDATE tdm_matches
-           SET status = 'completed', winner_team_id = $1, end_time = NOW()
+           SET status = 'completed', winner_team_id = $1, end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
            WHERE id = $2`,
           [winnerTeamId, match_id]
         );
@@ -1541,7 +1541,7 @@ export const completeTdmMatch = async (req, res) => {
     await client.query(
       `
       UPDATE tdm_matches
-      SET status = 'completed', winner_team_id = $1, end_time = NOW()
+      SET status = 'completed', winner_team_id = $1, end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
       WHERE id = $2
     `,
       [winner_team_id, match_id]
@@ -1922,11 +1922,11 @@ export const adminResolveDispute = async (req, res) => {
         });
       }
 
-      // Update match winner and status
+      // Update match winner and status with IST timestamp
       await client.query(
         `
         UPDATE tdm_matches
-        SET winner_team_id = $1, status = 'completed', end_time = NOW()
+        SET winner_team_id = $1, status = 'completed', end_time = NOW() AT TIME ZONE 'Asia/Kolkata'
         WHERE id = $2
       `,
         [winner_team_id, matchId]
@@ -2146,10 +2146,10 @@ export const startTdmMatch = async (req, res) => {
       });
     }
 
-    // Update match status to in_progress
+    // Update match status to in_progress with IST timestamp
     await pool.query(
       `
-      UPDATE tdm_matches SET status = 'in_progress', start_time = NOW() WHERE id = $1
+      UPDATE tdm_matches SET status = 'in_progress', start_time = NOW() AT TIME ZONE 'Asia/Kolkata' WHERE id = $1
     `,
       [match_id]
     );

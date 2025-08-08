@@ -903,3 +903,168 @@ export const getDisputedTdmMatches = async (req, res) => {
     });
   }
 };
+
+// Admin: Set room details for a TDM match
+export const adminSetRoomDetails = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { match_id } = req.params;
+    const { room_id, room_password } = req.body;
+
+    if (!room_id || !room_password) {
+      return res.status(400).json({
+        success: false,
+        message: "Room ID and password are required",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // Check if match exists and is in confirmed status
+    const matchCheck = await client.query(
+      `SELECT * FROM tdm_matches WHERE id = $1 AND status = 'confirmed'`,
+      [match_id]
+    );
+
+    if (matchCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "Match not found or not in confirmed status",
+      });
+    }
+
+    // Update match with room details
+    await client.query(
+      `UPDATE tdm_matches
+       SET room_id = $1, room_password = $2
+       WHERE id = $3`,
+      [room_id, room_password, match_id]
+    );
+
+    // Get all participants for notifications
+    const participantsResult = await client.query(
+      `SELECT DISTINCT tm.user_id 
+       FROM tdm_team_members tm
+       JOIN tdm_teams t ON tm.team_id = t.id
+       WHERE t.match_id = $1`,
+      [match_id]
+    );
+
+    await client.query("COMMIT");
+
+    // Send notifications to all participants
+    const matchName = matchCheck.rows[0]?.game_name || "TDM Match";
+    const notificationTitle = `Room Details Set: ${matchName}`;
+    const notificationBody = `Room ID: ${room_id}\nPassword: ${room_password}\nGet ready to play!`;
+
+    // Here you would send notifications (implement based on your notification system)
+
+    return res.status(200).json({
+      success: true,
+      message: "Room details set successfully",
+      data: {
+        room_id,
+        room_password,
+        match_id,
+        participants_notified: participantsResult.rows.length,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error setting room details:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to set room details",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+// Admin: Start a TDM match
+export const adminStartTdmMatch = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { match_id } = req.params;
+
+    await client.query("BEGIN");
+
+    // Check if match exists and is in confirmed status with room details
+    const matchCheck = await client.query(
+      `SELECT * FROM tdm_matches WHERE id = $1 AND status = 'confirmed'`,
+      [match_id]
+    );
+
+    if (matchCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "Match not found or not in confirmed status",
+      });
+    }
+
+    const match = matchCheck.rows[0];
+
+    // Check if room details exist
+    if (!match.room_id || !match.room_password) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "Room details must be set before starting the match",
+      });
+    }
+
+    // Update match status to in_progress with IST timestamp
+    await client.query(
+      `UPDATE tdm_matches SET status = 'in_progress', start_time = NOW() AT TIME ZONE 'Asia/Kolkata' WHERE id = $1`,
+      [match_id]
+    );
+
+    // Get all participants for notifications
+    const participantsResult = await client.query(
+      `SELECT tm.user_id 
+       FROM tdm_team_members tm
+       JOIN tdm_teams t ON tm.team_id = t.id
+       WHERE t.match_id = $1`,
+      [match_id]
+    );
+
+    await client.query("COMMIT");
+
+    // Send notifications to all participants
+    const matchName = match.game_name || "TDM Match";
+    const notificationTitle = `Match Started: ${matchName}`;
+    const notificationBody = `Your match has started! Join the game room now!\nRoom ID: ${match.room_id}\nPassword: ${match.room_password}`;
+
+    // Here you would send notifications (implement based on your notification system)
+
+    return res.status(200).json({
+      success: true,
+      message: "Match started successfully",
+      data: {
+        match_id,
+        status: "in_progress",
+        start_time: new Date(),
+        room_details: {
+          room_id: match.room_id,
+          room_password: match.room_password,
+        },
+        participants_notified: participantsResult.rows.length,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error starting TDM match:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to start TDM match",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};

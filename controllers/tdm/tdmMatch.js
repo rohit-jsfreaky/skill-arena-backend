@@ -2089,123 +2089,18 @@ export const getUserTdmMatches = async (req, res) => {
   }
 };
 
-// Start a confirmed match (change status to in_progress)
+// Start a confirmed match (change status to in_progress) - ADMIN ONLY
 export const startTdmMatch = async (req, res) => {
   try {
-    const { userId } = req.auth;
-    const { match_id } = req.params;
-    const { user_id } = req.query;
-
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized: You need to log in.",
-      });
-    }
-
-    // Check if user is the match creator
-    const matchCheck = await pool.query(
-      `
-      SELECT * FROM tdm_matches WHERE id = $1 AND status = 'confirmed'
-    `,
-      [match_id]
-    );
-
-    if (matchCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Match not found or not in confirmed status",
-      });
-    }
-
-    const match = matchCheck.rows[0];
-
-    // Check if user is captain of Team A (match creator's team)
-    const captainCheck = await pool.query(
-      `
-      SELECT tm.* FROM tdm_team_members tm
-      JOIN tdm_teams t ON tm.team_id = t.id
-      WHERE t.match_id = $1 AND t.team_type = 'team_a'
-      AND tm.user_id = $2 AND tm.is_captain = true
-    `,
-      [match_id, user_id]
-    );
-
-    if (captainCheck.rows.length === 0) {
-      return res.status(403).json({
-        success: false,
-        message: "Only the team captain can start the match",
-      });
-    }
-
-    // Check if room details exist
-    if (!match.room_id || !match.room_password) {
-      return res.status(400).json({
-        success: false,
-        message: "Room details must be set before starting the match",
-      });
-    }
-
-    // Update match status to in_progress with IST timestamp
-    await pool.query(
-      `
-      UPDATE tdm_matches SET status = 'in_progress', start_time = NOW() AT TIME ZONE 'Asia/Kolkata' WHERE id = $1
-    `,
-      [match_id]
-    );
-
-    // Get match details for notification
-    const matchResult = await pool.query(
-      `SELECT game_name FROM tdm_matches WHERE id = $1`,
-      [match_id]
-    );
-
-    const matchName = matchResult.rows[0]?.game_name || "TDM Match";
-
-    // Get all participants from both teams
-    const allParticipantsResult = await pool.query(
-      `SELECT tm.user_id 
-       FROM tdm_team_members tm
-       JOIN tdm_teams t ON tm.team_id = t.id
-       WHERE t.match_id = $1`,
-      [match_id]
-    );
-
-    const notificationTitle = `Match Started: ${matchName}`;
-    const notificationBody = `Your match has started. Join the game room now!`;
-
-    // Send notifications to all participants
-    for (const participant of allParticipantsResult.rows) {
-      // Skip sending to the captain who started the match
-      if (participant.user_id !== parseInt(user_id)) {
-        await sendUserNotification(
-          participant.user_id,
-          notificationTitle,
-          notificationBody,
-          null,
-          {
-            type: "tdm_match_started",
-            match_id: match_id.toString(),
-            route: "tdm/match/" + match_id,
-          }
-        );
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Match started successfully",
-      data: {
-        match_id,
-        status: "in_progress",
-        notifications_sent: allParticipantsResult.rowCount - 1, // Subtract 1 for the captain
-      },
+    return res.status(403).json({
+      success: false,
+      message: "Match starting is restricted to administrators only. Please contact an admin to start the match.",
     });
   } catch (error) {
-    console.error("Error starting TDM match:", error);
+    console.error("Error in startTdmMatch:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to start TDM match",
+      message: "Failed to process request",
       error: error.message,
     });
   }
@@ -2687,116 +2582,17 @@ export const checkMatchReadiness = async (req, res) => {
 
 // New endpoint: Set room details by match creator
 export const setRoomDetails = async (req, res) => {
-  const client = await pool.connect();
-
   try {
-    const { userId } = req.auth;
-    const { match_id } = req.params;
-    const { room_id, room_password, user_id } = req.body;
-
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized: You need to log in.",
-      });
-    }
-
-    if (!room_id || !room_password) {
-      return res.status(400).json({
-        success: false,
-        message: "Room ID and password are required",
-      });
-    }
-
-    await client.query("BEGIN");
-
-    // Check if the user is the match creator
-    const matchCheck = await client.query(
-      `SELECT * FROM tdm_matches WHERE id = $1 AND created_by = $2`,
-      [match_id, user_id]
-    );
-
-    if (matchCheck.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(403).json({
-        success: false,
-        message: "Only the match creator can set room details",
-      });
-    }
-
-    // Check if match is in "confirmed" status
-    if (matchCheck.rows[0].status !== "confirmed") {
-      await client.query("ROLLBACK");
-      return res.status(400).json({
-        success: false,
-        message: "Room details can only be set for confirmed matches",
-      });
-    }
-
-    // Update match with room details
-    await client.query(
-      `UPDATE tdm_matches
-       SET room_id = $1, room_password = $2
-       WHERE id = $3`,
-      [room_id, room_password, match_id]
-    );
-
-    // Get match details for notification
-    const matchResult = await client.query(
-      `SELECT m.game_name FROM tdm_matches m WHERE m.id = $1`,
-      [match_id]
-    );
-
-    const matchName = matchResult.rows[0]?.game_name || "TDM Match";
-
-    // Get all participants from both teams
-    const allParticipantsResult = await client.query(
-      `SELECT tm.user_id 
-       FROM tdm_team_members tm
-       JOIN tdm_teams t ON tm.team_id = t.id
-       WHERE t.match_id = $1`,
-      [match_id]
-    );
-
-    const notificationTitle = `Room Details Available: ${matchName}`;
-    const notificationBody = `Room ID and password are now available for your match. Check match details to join.`;
-
-    // Send notifications to all participants
-    for (const participant of allParticipantsResult.rows) {
-      await sendUserNotification(
-        participant.user_id,
-        notificationTitle,
-        notificationBody,
-        null,
-        {
-          type: "tdm_room_details",
-          match_id: match_id.toString(),
-          route: "tdm/match/" + match_id,
-        }
-      );
-    }
-
-    await client.query("COMMIT");
-
-    return res.status(200).json({
-      success: true,
-      message: "Room details set successfully",
-      data: {
-        match_id,
-        room_id,
-        room_password,
-        notifications_sent: allParticipantsResult.rowCount,
-      },
+    return res.status(403).json({
+      success: false,
+      message: "Setting room details is restricted to administrators only. Please contact an admin to set room details.",
     });
   } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("Error setting room details:", error);
+    console.error("Error in setRoomDetails:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to set room details",
+      message: "Failed to process request",
       error: error.message,
     });
-  } finally {
-    client.release();
   }
 };

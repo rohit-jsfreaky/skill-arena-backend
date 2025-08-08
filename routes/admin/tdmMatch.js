@@ -8,7 +8,9 @@ import {
   resolveTdmDispute,
   cancelTdmMatchAdmin,
   getTdmStatistics,
-  setTdmMatchWinner
+  setTdmMatchWinner,
+  adminSetRoomDetails,
+  adminStartTdmMatch
 } from "../../controllers/admin/tdmMatch.js";
 import { verifyAdmin } from "../../middlewares/adminAuthMiddleware.js";
 
@@ -24,5 +26,7 @@ adminTdmRouter.post("/disputes/:dispute_id/resolve", verifyAdmin, resolveTdmDisp
 adminTdmRouter.post("/matches/:match_id/cancel", verifyAdmin, cancelTdmMatchAdmin);
 adminTdmRouter.get("/statistics", verifyAdmin, getTdmStatistics);
 adminTdmRouter.post("/matches/:match_id/set-winner", verifyAdmin, setTdmMatchWinner);
+adminTdmRouter.post("/matches/:match_id/set-room-details", verifyAdmin, adminSetRoomDetails);
+adminTdmRouter.post("/matches/:match_id/start", verifyAdmin, adminStartTdmMatch);
 
 export default adminTdmRouter;

@@ -2056,18 +2056,21 @@ export const getUserTdmMatches = async (req, res) => {
 
     const { user_id } = req.query;
 
-    // Get all matches where the user is a participant and match is not completed
+    // Get all matches where the user is a participant
+    // Show cancelled matches only if user was participating (joined a team)
+    // Don't show completed matches to keep the list clean
     const result = await pool.query(
       `
       SELECT m.*, t.team_type, t.team_name
       FROM tdm_matches m
       JOIN tdm_teams t ON m.id = t.match_id
       JOIN tdm_team_members tm ON t.id = tm.team_id
-      WHERE tm.user_id = $1 AND m.status != 'completed' AND m.status != 'cancelled'
+      WHERE tm.user_id = $1 AND m.status != 'completed'
       ORDER BY 
         CASE 
           WHEN m.status = 'confirmed' THEN 1
           WHEN m.status = 'in_progress' THEN 2
+          WHEN m.status = 'cancelled' THEN 4
           ELSE 3
         END,
         m.created_at DESC

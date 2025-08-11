@@ -5,6 +5,7 @@ import {
   getAllTournaments,
   searchTournaments,
   updateTournament,
+  createSlotBasedTournament,
 } from "../../controllers/admin/tournament.js";
 import { verifyAdmin } from "../../middlewares/adminAuthMiddleware.js";
 import { uploadImage } from "../../controllers/admin/imageUpload.js";
@@ -19,6 +20,7 @@ adminTournamentRouter.get(
   getAllTournaments
 );
 adminTournamentRouter.post("/create-tournament", verifyAdmin, createTournament);
+adminTournamentRouter.post("/create-slot-tournament", verifyAdmin, createSlotBasedTournament);
 adminTournamentRouter.delete(
   "/delete-tournament/:id",
   verifyAdmin,

@@ -503,3 +503,160 @@ export const searchTournaments = async (req, res) => {
     });
   }
 };
+
+// New slot-based tournament creation function
+export const createSlotBasedTournament = async (req, res) => {
+  let {
+    name,
+    game_name,
+    description,
+    image,
+    entry_fee_normal,
+    entry_fee_pro,
+    prize_pool,
+    tournament_mode, // 'solo', 'duo', '4v4', '6v6', '8v8'
+    max_groups,
+    start_time,
+    end_time,
+    rules,
+    youtube_live_url,
+  } = req.body;
+
+  if (
+    !name ||
+    !game_name ||
+    !description ||
+    !tournament_mode ||
+    !max_groups ||
+    !start_time ||
+    !end_time ||
+    !rules ||
+    !image
+  ) {
+    return res.status(400).json({ error: "All fields are required." });
+  }
+
+  // Validate tournament mode
+  const validModes = ['solo', 'duo', '4v4', '6v6', '8v8'];
+  if (!validModes.includes(tournament_mode)) {
+    return res.status(400).json({ 
+      error: `Invalid tournament mode. Must be one of: ${validModes.join(', ')}` 
+    });
+  }
+
+  // Calculate max participants based on tournament mode and groups
+  const slotsPerGroup = {
+    'solo': 1,
+    'duo': 2,
+    '4v4': 4,
+    '6v6': 6,
+    '8v8': 8
+  }[tournament_mode];
+  
+  const max_participants = max_groups * slotsPerGroup;
+
+  // Convert time to proper format
+  const startTime = new Date(start_time);
+  const endTime = new Date(end_time);
+  const currentTime = new Date();
+
+  if (startTime < currentTime) {
+    return res.status(400).json({ error: "Start time cannot be in the past." });
+  }
+
+  if (endTime < startTime) {
+    return res.status(400).json({ error: "End time cannot be before start time." });
+  }
+
+  // Simple URL validation
+  const isUrl = image && (image.startsWith("http://") || image.startsWith("https://"));
+  if (!isUrl) {
+    return res.status(400).json({ error: "Image must be a valid URL." });
+  }
+
+  // Optional YouTube URL validation
+  if (youtube_live_url) {
+    const isYouTubeUrl = youtube_live_url.startsWith("http://") || youtube_live_url.startsWith("https://");
+    if (!isYouTubeUrl) {
+      return res.status(400).json({ error: "YouTube live URL must be a valid URL." });
+    }
+  }
+
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    // Create the tournament
+    const tournamentQuery = `
+      INSERT INTO tournaments 
+      (name, game_name, description, image, entry_fee_normal, entry_fee_pro, prize_pool, 
+       team_mode, tournament_mode, max_participants, max_groups, start_time, end_time, 
+       rules, status, youtube_live_url) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+      RETURNING *;
+    `;
+
+    const tournamentValues = [
+      name,
+      game_name,
+      description,
+      image,
+      entry_fee_normal,
+      entry_fee_pro,
+      prize_pool,
+      tournament_mode, // Use tournament_mode for team_mode for backward compatibility
+      tournament_mode,
+      max_participants,
+      max_groups,
+      startTime,
+      endTime,
+      rules,
+      'upcoming', // Use 'upcoming' instead of 'registration_open' to match existing constraint
+      youtube_live_url || null,
+    ];
+
+    const tournamentResult = await client.query(tournamentQuery, tournamentValues);
+    const tournamentId = tournamentResult.rows[0].id;
+
+    // Create tournament groups
+    const groupInsertPromises = [];
+    for (let i = 1; i <= max_groups; i++) {
+      const groupQuery = `
+        INSERT INTO tournament_groups (tournament_id, group_number, is_full)
+        VALUES ($1, $2, false)
+      `;
+      groupInsertPromises.push(client.query(groupQuery, [tournamentId, i]));
+    }
+
+    await Promise.all(groupInsertPromises);
+
+    await client.query('COMMIT');
+
+    // Send global notification
+    await sendGlobalNotificationUtil(
+      `🚀 ${name} Just Dropped - ${tournament_mode.toUpperCase()} Tournament`,
+      `Join groups now! ${max_groups} groups available with ${slotsPerGroup} slots each 🔥`,
+      null,
+      {
+        route: "tournaments/" + tournamentId,
+      }
+    );
+
+    return res.status(201).json({
+      message: "Slot-based tournament created successfully",
+      tournament: {
+        ...tournamentResult.rows[0],
+        slots_per_group: slotsPerGroup,
+        total_groups: max_groups
+      },
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("Error creating slot-based tournament:", error.message);
+    return res.status(500).json({ error: "Internal server error." });
+  } finally {
+    client.release();
+  }
+};

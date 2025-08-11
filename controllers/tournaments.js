@@ -31,7 +31,7 @@ export const getAllTournaments = async (req, res) => {
     let countQuery, tournamentQuery;
 
     if (hasMembership) {
-      // Member can see all tournaments
+      // Members can see all tournaments, even if the game record is missing
       countQuery = `
         SELECT COUNT(*) 
         FROM tournaments t
@@ -43,18 +43,19 @@ export const getAllTournaments = async (req, res) => {
         (SELECT COUNT(*) FROM user_tournaments ut WHERE ut.tournament_id = t.id) as current_participants,
         g.access_type
         FROM tournaments t
-        JOIN games g ON t.game_name = g.name
+        LEFT JOIN games g ON t.game_name = g.name
         WHERE t.status != 'completed'
         ORDER BY t.start_time ASC
         LIMIT $1 OFFSET $2
       `;
     } else {
-      // Non-member can only see tournaments for free games
+      // Non-member can only see tournaments for free games.
+      // Also include tournaments whose game is not found yet (treat as visible), so new tournaments appear.
       countQuery = `
         SELECT COUNT(*) 
         FROM tournaments t
-        JOIN games g ON t.game_name = g.name
-        WHERE t.status != 'completed' AND g.access_type = 'free'
+        LEFT JOIN games g ON t.game_name = g.name
+        WHERE t.status != 'completed' AND (g.access_type = 'free' OR g.name IS NULL)
       `;
 
       tournamentQuery = `
@@ -62,8 +63,8 @@ export const getAllTournaments = async (req, res) => {
         (SELECT COUNT(*) FROM user_tournaments ut WHERE ut.tournament_id = t.id) as current_participants,
         g.access_type
         FROM tournaments t
-        JOIN games g ON t.game_name = g.name
-        WHERE t.status != 'completed' AND g.access_type = 'free'
+        LEFT JOIN games g ON t.game_name = g.name
+        WHERE t.status != 'completed' AND (g.access_type = 'free' OR g.name IS NULL)
         ORDER BY t.start_time ASC
         LIMIT $1 OFFSET $2
       `;
@@ -494,5 +495,322 @@ export const getUserTournamentFinancials = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+// New slot-based tournament endpoints
+export const getTournamentGroups = async (req, res) => {
+  try {
+    // Use auth only to verify the request; use DB user id from query for data ops
+    const { userId } = req.auth;
+    const { tournamentId } = req.params;
+    const dbUserId = req.query.user_id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized: You need to log in." });
+    }
+
+    if (!dbUserId) {
+      return res.status(400).json({ message: "Missing user_id in request" });
+    }
+
+    // Get tournament details
+    const tournamentQuery = await pool.query(
+      `SELECT tournament_mode, max_groups, max_participants 
+       FROM tournaments WHERE id = $1`,
+      [tournamentId]
+    );
+
+    if (tournamentQuery.rows.length === 0) {
+      return res.status(404).json({ message: "Tournament not found" });
+    }
+
+    const tournament = tournamentQuery.rows[0];
+    
+    // Calculate slots per group based on tournament mode
+    const slotsPerGroup = {
+      'solo': 1,
+      'duo': 2,
+      '4v4': 4,
+      '6v6': 6,
+      '8v8': 8
+    }[tournament.tournament_mode] || 1;
+
+    // Get all groups with their current member count
+    const groupsQuery = await pool.query(
+      `SELECT 
+        tg.id,
+        tg.group_number,
+        tg.is_full,
+        COUNT(tgm.id) as current_members,
+        $2 as max_members
+       FROM tournament_groups tg
+       LEFT JOIN tournament_group_members tgm ON tg.id = tgm.group_id
+       WHERE tg.tournament_id = $1
+       GROUP BY tg.id, tg.group_number, tg.is_full
+       ORDER BY tg.group_number`,
+      [tournamentId, slotsPerGroup]
+    );
+
+    // Check if user is already in a group for this tournament
+    const userGroupQuery = await pool.query(
+      `SELECT tg.id as group_id, tg.group_number 
+       FROM tournament_groups tg
+       JOIN tournament_group_members tgm ON tg.id = tgm.group_id
+       WHERE tg.tournament_id = $1 AND tgm.user_id = $2`,
+      [tournamentId, dbUserId]
+    );
+
+    const userGroup = userGroupQuery.rows[0] || null;
+
+    return res.json({
+      success: true,
+      data: {
+        tournament_mode: tournament.tournament_mode,
+        max_groups: tournament.max_groups,
+        slots_per_group: slotsPerGroup,
+        groups: groupsQuery.rows,
+        user_group: userGroup
+      }
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const joinTournamentGroup = async (req, res) => {
+  try {
+    // Auth only for verification; use DB user id from body
+    const { userId } = req.auth;
+    const { tournamentId } = req.params;
+    const { groupId, user_id: dbUserId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized: You need to log in." });
+    }
+
+    if (!dbUserId) {
+      return res.status(400).json({ message: "Missing user_id in request body" });
+    }
+
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      // Check if tournament exists and is accepting registrations
+      const tournamentQuery = await client.query(
+        `SELECT id, status, tournament_mode, max_groups, entry_fee_normal, entry_fee_pro 
+         FROM tournaments WHERE id = $1`,
+        [tournamentId]
+      );
+
+      if (tournamentQuery.rows.length === 0) {
+        throw new Error("Tournament not found");
+      }
+
+      const tournament = tournamentQuery.rows[0];
+      
+      if (tournament.status !== 'upcoming' && tournament.status !== 'registration_open') {
+        throw new Error("Tournament registration is not open");
+      }
+
+      // Check if user is already in any group for this tournament
+      const existingGroupQuery = await client.query(
+        `SELECT tg.group_number 
+         FROM tournament_groups tg
+         JOIN tournament_group_members tgm ON tg.id = tgm.group_id
+         WHERE tg.tournament_id = $1 AND tgm.user_id = $2`,
+  [tournamentId, dbUserId]
+      );
+
+      if (existingGroupQuery.rows.length > 0) {
+        throw new Error(`Already joined group ${existingGroupQuery.rows[0].group_number}`);
+      }
+
+  // Validate group exists and belongs to this tournament
+      const groupQuery = await client.query(
+        `SELECT id, group_number, is_full 
+         FROM tournament_groups 
+         WHERE id = $1 AND tournament_id = $2`,
+        [groupId, tournamentId]
+      );
+
+      if (groupQuery.rows.length === 0) {
+        throw new Error("Group not found");
+      }
+
+      const group = groupQuery.rows[0];
+      
+      if (group.is_full) {
+        throw new Error("Group is already full");
+      }
+
+      // Calculate slots per group
+      const slotsPerGroup = {
+        'solo': 1,
+        'duo': 2,
+        '4v4': 4,
+        '6v6': 6,
+        '8v8': 8
+      }[tournament.tournament_mode] || 1;
+
+      // Check current group members count
+      const memberCountQuery = await client.query(
+        `SELECT COUNT(*) as count FROM tournament_group_members WHERE group_id = $1`,
+        [groupId]
+      );
+
+      const currentMembers = parseInt(memberCountQuery.rows[0].count);
+      
+      if (currentMembers >= slotsPerGroup) {
+        throw new Error("Group is already full");
+      }
+
+      // Fetch user and compute entry fee
+      const userRes = await client.query(
+        `SELECT id, wallet, membership_id FROM users WHERE id = $1 FOR UPDATE`,
+        [dbUserId]
+      );
+      if (userRes.rows.length === 0) {
+        throw new Error("User not found");
+      }
+      const user = userRes.rows[0];
+      const entryFee = user.membership_id ? tournament.entry_fee_pro : tournament.entry_fee_normal;
+      if (Number(user.wallet) < Number(entryFee)) {
+        throw new Error("Insufficient funds");
+      }
+
+      // Add user to group
+      await client.query(
+        `INSERT INTO tournament_group_members (group_id, user_id, joined_at)
+         VALUES ($1, $2, NOW())`,
+  [groupId, dbUserId]
+      );
+
+      // Update is_full flag if group is now full
+      if (currentMembers + 1 >= slotsPerGroup) {
+        await client.query(
+          `UPDATE tournament_groups SET is_full = true WHERE id = $1`,
+          [groupId]
+        );
+      }
+
+      // Deduct entry fee and increment total_games_played
+      await client.query(
+        `UPDATE users 
+         SET wallet = wallet - $1,
+             total_games_played = COALESCE(total_games_played, 0) + 1
+         WHERE id = $2`,
+        [entryFee, dbUserId]
+      );
+
+      // Record participation with payment amount
+      await client.query(
+        `INSERT INTO user_tournaments (user_id, tournament_id, payment_amount, joined_at)
+         VALUES ($1, $2, $3, NOW())`,
+        [dbUserId, tournamentId, entryFee]
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        success: true,
+        message: `Successfully joined group ${group.group_number}`
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    } finally {
+      client.release();
+    }
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const leaveTournamentGroup = async (req, res) => {
+  try {
+  const { userId } = req.auth;
+  const { tournamentId } = req.params;
+  const dbUserId = req.query.user_id || req.body?.user_id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized: You need to log in." });
+    }
+
+    if (!dbUserId) {
+      return res.status(400).json({ message: "Missing user_id in request" });
+    }
+
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      // Find user's group in this tournament
+      const userGroupQuery = await client.query(
+        `SELECT tg.id as group_id, tg.group_number 
+         FROM tournament_groups tg
+         JOIN tournament_group_members tgm ON tg.id = tgm.group_id
+         WHERE tg.tournament_id = $1 AND tgm.user_id = $2`,
+        [tournamentId, dbUserId]
+      );
+
+      if (userGroupQuery.rows.length === 0) {
+        throw new Error("You are not in any group for this tournament");
+      }
+
+      const groupId = userGroupQuery.rows[0].group_id;
+      const groupNumber = userGroupQuery.rows[0].group_number;
+
+      // Remove user from group
+      await client.query(
+        `DELETE FROM tournament_group_members 
+         WHERE group_id = $1 AND user_id = $2`,
+        [groupId, dbUserId]
+      );
+
+      // Update is_full flag since there's now space
+      await client.query(
+        `UPDATE tournament_groups SET is_full = false WHERE id = $1`,
+        [groupId]
+      );
+
+      // Remove from user_tournaments table
+      await client.query(
+        `DELETE FROM user_tournaments 
+         WHERE user_id = $1 AND tournament_id = $2`,
+        [dbUserId, tournamentId]
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        success: true,
+        message: `Successfully left group ${groupNumber}`
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    } finally {
+      client.release();
+    }
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
   }
 };

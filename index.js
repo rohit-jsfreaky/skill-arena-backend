@@ -25,6 +25,7 @@ import tournamentResultsRouter from "./routes/tournamentResults.js";
 import "./utils/TournamentStatusCheck.js";
 import "./utils/adminAuthotpcheck.js";
 import { initChatTables } from "./utils/initiateTables.js";
+import { updateTournamentSchemaForSlots } from "./utils/updateTournamentSchemaForSlots.js";
 import { adminTournamentRouter } from "./routes/admin/tournament.js";
 import { adminAuthRoutes } from "./routes/admin/adminAuth.js";
 import bcrypt from "bcryptjs";
@@ -174,6 +175,8 @@ app.use((err, req, res, next) => {
 //  initTdmTables();
 // Initialize notification tables
 //  initNotificationTables();
+// Update tournament schema for slots
+// updateTournamentSchemaForSlots();
 // Initialize leaderboard tables
 //  initLeaderboardTables();
 // Fix leaderboard schema
